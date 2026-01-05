@@ -22,11 +22,10 @@ contract WalletContract is BaseUsdcContract, IWallet {
     mapping(address => bool) public oracles; // Built-in oracle contracts
 
     bytes32 private immutable DOMAIN_SEPARATOR;
-    bytes32 private constant TYPEHASH_EIP712_DOMAIN = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant TYPEHASH_BIND_WALLET = keccak256("BindWallet(address wallet,uint256 nonce,uint256 chainId,address walletContract)");
     bytes32 private constant TYPEHASH_REDEEM = keccak256("Redeem(address wallet,uint256 amount,uint256 nonce,uint256 chainId,address walletContract)");
     bytes32 private constant TYPEHASH_PRESIGN = keccak256("PreSign(uint64 amount,uint256 nonce,uint256 chainId,address walletContract)");
-    bytes32 private constant TYPEHASH_UPGRADE_WALLET = keccak256("UpgradeWallet(address implementation,address predictionFactory,address oracle,uint256 chainId,address walletContract)");
+    bytes32 private constant TYPEHASH_UPGRADE_WALLET = keccak256("UpgradeWallet(address implementation,address predictionFactory,address oracle,bool value,uint256 nonce,uint256 chainId,address walletContract)");
 
     // Uses ERC-1967 storage slot address, based on a "hybrid mode" upgrade approach. Important points:
     // 1. The new logic must inherit BaseUsdcContract, which inherits from BaseContract. This means variables in all base classes within the inheritance chain cannot be added, removed, or changed in order.
@@ -36,40 +35,30 @@ contract WalletContract is BaseUsdcContract, IWallet {
     // 5. Retrieval logic: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1);
     bytes32 private constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
-    event WalletBound(uint256 requestId, address walletContract, address wallet, bool byUser);              // Wallet bound event
-    event Redeemed(uint256 requestId, address walletContract, address wallet, uint256 amount, bool byUser); // Redemption event
-    event PreSigned(uint256 requestId, uint64 amount, bool byUser);                                         // Pre-sign event
-    event Presented(uint256 requestId);                                                                     // Bonus presentation event
-    event TokenRescued(uint256 requestId, address from, address to, uint256 balance);                       // Token rescue event
-    event WalletRecycled(uint256 requestId, uint256 balance, bool success);                                 // Wallet recycling event
-    event Upgraded(address indexed implementation);                                                         // Contract upgrade event
-    event WalletUpgraded(uint256 requestId);                                                                // Wallet contract upgrade event
+    event WalletBound(uint256 requestId, address wallet, bool byUser);                // Wallet bound event
+    event Entrusted(uint256 requestId, address wallet, uint256 amount, bool byUser);  // Entrust event
+    event Redeemed(uint256 requestId, address wallet, uint256 amount, bool byUser);   // Reddeem event
+    event PreSigned(uint256 requestId, uint64 amount, bool byUser);                   // Pre-sign event
+    event Presented(uint256 requestId);                                               // Bonus presentation event
+    event TokenRescued(uint256 requestId, address from, address to, uint256 balance); // Token rescue event
+    event WalletRecycled(uint256 requestId, uint256 balance, bool success);           // Wallet recycled event
+    event Upgraded(address indexed implementation);                                   // Contract upgraded event
+    event WalletUpgraded(uint256 requestId);                                          // Wallet contract upgraded event
 
     // Only the bound wallet or an executor EOA can call
     modifier onlyBoundWalletOrExecutorEOA() {
-        require(msg.sender == boundWallet || isExecutorEOA(msg.sender), "unauthorized");
-        _;
-    }
-
-    // Only prediction contracts can call
-    modifier onlyPrediction() {
-        require(_checkPrediction(msg.sender), "unauthorized");
-        _;
-    }
-
-    // Only oracle contracts can call
-    modifier onlyOracle() {
-        require(_checkOracle(msg.sender), "unauthorized");
+        require(msg.sender == boundWallet || IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA), "unauthorized");
         _;
     }
 
     // Initialization
     constructor() {
-        predictionFactories.push(0x2FAFd4c5E8FeeF8816AeB954846d2EacCc68f30c); // Built-in prediction factory contract
-        oracles[0xB4259DE0CE584da6e76ee75c1B6D3eab6f663137] = true;           // Built-in oracle contract
+        predictionFactories.push(0x0000000000000000000000000000000000000000); // Built-in prediction factory contract
+        oracles[0x0000000000000000000000000000000000000000] = true;           // Built-in oracle contract
+        oracles[0x0000000000000000000000000000000000000000] = true;           // Built-in chainlink oracle contract
 
         // EIP712 Domain Separator
-        DOMAIN_SEPARATOR = keccak256(abi.encode(TYPEHASH_EIP712_DOMAIN, keccak256(bytes("Wallet Contract")), keccak256(bytes("1")), block.chainid, address(this)));
+        DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712Lib.EIP712_DOMAIN, keccak256(bytes("Wallet Contract")), keccak256(bytes("1")), block.chainid, address(this)));
     }
 
     // Non-payable fallback function, key protection
@@ -110,14 +99,28 @@ contract WalletContract is BaseUsdcContract, IWallet {
         }
 
         // Log success
-        emit WalletBound(requestId, address(this), wallet, byUser);
+        emit WalletBound(requestId, wallet, byUser);
+    }
+
+    // Entrust USDC to contract. Besides platform calls, the bound wallet can also call to redeem by itself.
+    function entrust(uint256 requestId, address from, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external onlyBoundWalletOrExecutorEOA {
+        // Permit
+        IUSDC.permit(from, address(this), amount, deadline, v, r, s);
+
+        // Transfer to Wallet Contract
+        require(IUSDC.transferFrom(from, address(this), amount), "entrust failed"); 
+
+        // Record last used time
+        lastTime = uint64(block.timestamp);
+
+        // Log success
+        emit Entrusted(requestId, from, amount, msg.sender == boundWallet);
     }
 
     // Redeem USDC to a specified address. Besides platform calls, the bound wallet can also call to redeem by itself.
     function redeem(uint256 requestId, address wallet, uint256 amount, bytes calldata signature) external onlyBoundWalletOrExecutorEOA {
         // Redemption amount does not include the bonus
-        uint256 balance = IUSDC.balanceOf(address(this));
-        require(wallet != address(0) && balance >= (amount + bonus), "param err");
+        require(wallet != address(0) && IUSDC.balanceOf(address(this)) >= (amount + bonus), "param err");
 
         // Whether called by the user
         bool byUser = msg.sender == boundWallet;
@@ -131,7 +134,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
         transferUsdc(wallet, amount);
 
         // Log success
-        emit Redeemed(requestId, address(this), wallet, amount, byUser);
+        emit Redeemed(requestId, wallet, amount, byUser);
     }
 
     // Pre-sign
@@ -157,20 +160,20 @@ contract WalletContract is BaseUsdcContract, IWallet {
     // Award bonus / Unlock bonus / Reclaim bonus
     function present(uint256 requestId, uint64 amount, address from, bytes32 code, bytes calldata signature, uint64 unlocked, uint64 reclaimed) external onlyExecutorEOA {
         // Award bonus
-        if (amount > 0) {
+        if (amount != 0) {
             require(IPERMISSION.checkAddress(from, AddressTypeLib.MARKETING), "from err");
             IMarketing(from).transferFrom(amount, address(this), code, signature);
             bonus += amount;
         }
 
         // Unlock bonus
-        if (unlocked > 0) {
+        if (unlocked != 0) {
             require(bonus >= unlocked, "unlocked err");
             bonus -= unlocked;
         }
 
         // Reclaim bonus
-        if (reclaimed > 0) {
+        if (reclaimed != 0) {
             require(bonus >= reclaimed, "reclaimed err");
             bonus -= reclaimed;
             transferUsdc(IPERMISSION.feeEOA(), reclaimed);
@@ -183,11 +186,14 @@ contract WalletContract is BaseUsdcContract, IWallet {
     // Rescue ERC-20 tokens
     function rescueToken(uint256 requestId, address from, address to) external onlyExecutorEOA {
         // Ensure safety via whitelist, and USDC is not supported for rescue because USDC must be redeemed via redeem
-        require(IPERMISSION.checkAddress(from, AddressTypeLib.ERC20) && from != USDC && to != address(0), "param err");
+        require(from != USDC && to != address(0) && IPERMISSION.checkAddress(from, AddressTypeLib.ERC20), "param err");
 
         // Rescue transfer
         IERC20 token = IERC20(from);
         uint256 balance = token.balanceOf(address(this));
+        require(balance != 0, "balance err");
+
+        // No need to worry about whether the transfer was successful
         token.transfer(to, balance);
 
         // Log success
@@ -204,18 +210,19 @@ contract WalletContract is BaseUsdcContract, IWallet {
 
         // If a wallet is bound, it cannot be recycled within 3 days of binding to prevent users from binding, then depositing, but being recycled before having a chance to trade.
         if (block.timestamp > (3 days + boundTime)) {
-            if (balance == 0) {
-                // Wallet balance equals 0, but no transaction record for over half a year, can be recycled
-                if (block.timestamp > (180 days + lastTime)) {
-                    success = true;
-                }
-            } else {
+            if (balance != 0) {
                 // Wallet balance greater than 0, but must have no transaction record for at least 1 year to be recycled, and balance transferred to: fee EOA
-                if (lastTime == 0) {
+                if (lastTime != 0) {
+                    if (block.timestamp > (365 days + lastTime)) {
+                        transferUsdc(IPERMISSION.feeEOA(), balance);
+                        success = true;
+                    }
+                } else {
                     lastTime = uint64(block.timestamp);
                 }
-                if (block.timestamp > (365 days + lastTime)) {
-                    transferUsdc(IPERMISSION.feeEOA(), balance);
+            } else {
+                // Wallet balance equals 0, but no transaction record for over half a year, can be recycled
+                if (block.timestamp > (180 days + lastTime)) {
                     success = true;
                 }
             }
@@ -235,10 +242,10 @@ contract WalletContract is BaseUsdcContract, IWallet {
     }
 
     // Upgrade contract
-    function upgradeWallet(uint256 requestId, address newImplementation, address newPredictionFactory, address newOracle, bytes calldata signature) external onlyExecutorEOA {
+    function upgradeWallet(uint256 requestId, address newImplementation, address newPredictionFactory, address newOracle, bool value, bytes calldata signature) external onlyExecutorEOA {
         // Only bound wallets need signature verification
-        if (boundWallet != address(0)) {
-            require(boundWallet == EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, abi.encode(TYPEHASH_UPGRADE_WALLET, newImplementation, newPredictionFactory, newOracle, block.chainid, address(this)), signature), "signature err");
+        if (boundWallet != address(0) && (newImplementation != address(0) || value)) {
+            require(boundWallet == EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, abi.encode(TYPEHASH_UPGRADE_WALLET, newImplementation, newPredictionFactory, newOracle, value, nonce++, block.chainid, address(this)), signature), "signature err");
         }
 
         // Update implementation address
@@ -251,13 +258,34 @@ contract WalletContract is BaseUsdcContract, IWallet {
         }
 
         // Update contracts, while preserving contract history so that old predictions/oracles can continue to be used
-        if (newPredictionFactory != address(0)) {
-            require(IPERMISSION.checkAddress(newPredictionFactory, AddressTypeLib.PREDICTION_FACTORY), "prediction err");
-            predictionFactories.push(newPredictionFactory);
+        if (newPredictionFactory != address(0)) {            
+            uint256 index;
+            uint256 len = predictionFactories.length;
+            for (uint256 i; i < len;) {
+                if (predictionFactories[i] == newPredictionFactory) {
+                    index = i + 1;
+                    break;
+                }
+
+                // for
+                unchecked { ++i; }
+            }
+            if (value) {                
+                require(index == 0 && IPERMISSION.checkAddress(newPredictionFactory, AddressTypeLib.PREDICTION_FACTORY), "factory err");
+                predictionFactories.push(newPredictionFactory);
+            } else {
+                require(index != 0, "factory err");
+                predictionFactories[index - 1] = predictionFactories[len - 1];
+                predictionFactories.pop();
+            }
         }
         if (newOracle != address(0)) {
-            require(IPERMISSION.checkAddress(newOracle, AddressTypeLib.ORACLE), "oracle err");
-            oracles[newOracle] = true;
+            if (value) {
+                require(IPERMISSION.checkAddress(newOracle, AddressTypeLib.ORACLE), "oracle err");
+            } else {
+                require(oracles[newOracle], "oracle err");
+            }
+            oracles[newOracle] = value;
         }
 
         // Log success
@@ -265,46 +293,33 @@ contract WalletContract is BaseUsdcContract, IWallet {
     }
 
     // Verify buy signature and transfer USDC to prediction contract
-    function transferToBuyPrediction(address oracle, uint256 amount, bytes memory encodedData, bytes memory signature) external onlyPrediction {
-        require(_checkOracle(oracle), "oracle err");
+    function transferToBuyPrediction(address oracle, uint256 amount, bytes calldata encodedData, bytes calldata signature) external {
+        require(oracles[oracle] && _checkPrediction(msg.sender), "unauthorized");
         _checkSign(amount, encodedData, signature);
-        transferUsdc(msg.sender, amount);
+        transferUsdc(msg.sender, amount);        
     }
 
     // Verify sell signature
-    function transferToSellPrediction(uint256 amount, bytes memory encodedData, bytes memory signature) external onlyPrediction {
+    function transferToSellPrediction(uint256 amount, bytes calldata encodedData, bytes calldata signature) external {
+        require(_checkPrediction(msg.sender), "unauthorized");
         _checkSign(amount, encodedData, signature);
     }
 
     // Verify signature and transfer USDC to oracle contract
-    function transferToOracle(uint256 amount, bytes memory encodedData, bytes memory signature) external onlyOracle {
+    function transferToOracle(uint256 amount, bytes calldata encodedData, bytes calldata signature) external {
+        require(oracles[msg.sender], "unauthorized");
         _checkSign(amount, encodedData, signature);
         transferUsdc(msg.sender, amount);
     }
 
-    // Verify if prediction contract is legitimate (user approved, platform also approved)
-    function _checkPrediction(address addr) private returns (bool) {
-        if (block.timestamp < (cacheTime + permissions[addr][AddressTypeLib.PREDICTION])) {
-            return true;
-        }
+    // Check if the prediction is correct
+    function _checkPrediction(address prediction) private view returns (bool) {
         uint256 len = predictionFactories.length;
         while (len != 0) {
-            if (IFactory(predictionFactories[--len]).check(addr) && IPERMISSION.checkAddress(addr, AddressTypeLib.PREDICTION)) {
-                permissions[addr][AddressTypeLib.PREDICTION] = block.timestamp;
+            unchecked { --len; }
+            if (IFactory(predictionFactories[len]).check(prediction)) {
                 return true;
             }
-        }
-        return false;
-    }
-
-    // Verify if oracle contract is legitimate (user approved, platform also approved)
-    function _checkOracle(address addr) private returns (bool) {
-        if (block.timestamp < (cacheTime + permissions[addr][AddressTypeLib.ORACLE])) {
-            return true;
-        }
-        if (oracles[addr] && IPERMISSION.checkAddress(addr, AddressTypeLib.ORACLE)) {
-            permissions[addr][AddressTypeLib.ORACLE] = block.timestamp;
-            return true;
         }
         return false;
     }
@@ -312,7 +327,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
     // Check signature and update pre-signed amount
     function _checkSign(uint256 amount, bytes memory encodedData, bytes memory signature) private {
         if (boundWallet != address(0)) {
-            if (signature.length > 0 || preSignAmount < amount) {
+            if (signature.length != 0 || preSignAmount < amount) {
                 require(boundWallet == EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, encodedData, signature), "signature err"); // If a signature is passed in or the operation amount exceeds the pre-signed amount, signature validity must be checked.
             } else {
                 preSignAmount -= uint64(amount); // Deduct pre-signed amount (overflow considered)

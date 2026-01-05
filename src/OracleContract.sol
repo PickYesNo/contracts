@@ -17,22 +17,20 @@ contract OracleContract is BaseUsdcContract, IOracle {
 
     // Type Hashes
     bytes32 private immutable DOMAIN_SEPARATOR;
-    bytes32 private constant TYPEHASH_EIP712_DOMAIN = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant TYPEHASH_VOTE = keccak256("Vote(address prediction,uint256 optionId,uint256 outcome,uint256 staking,uint256 chainId,address oracleContract)");
     bytes32 private constant TYPEHASH_CHALLENGE = keccak256("Challenge(address prediction,uint256 optionId,uint256 outcome,uint256 staking,uint256 chainId,address oracleContract)");
     bytes32 private constant TYPEHASH_ARBITRATE = keccak256("Arbitrate(address prediction,uint256 optionId,uint256 outcome,uint256 chainId,address oracleContract)");
-    mapping(address => mapping(uint256 => Prediction)) private predictions; // Voting records: address=prediction contract address, uint256=round, Prediction=voting record
+    mapping(address => mapping(uint256 => Prediction)) private predictions; // Voting records: address=prediction contract address, uint256=round no, Prediction=voting record
 
-    event Voted(uint256 requestId);                      // Vote event
-    event Challenged(uint256 requestId);                 // Challenge event
-    event Arbitrated(uint256 requestId);                 // Arbitration event
-    event FeeTransferred(uint256 requestId);             // Transfer to fee event
-    event Rewarded(uint256 requestId, address[] wallet); // Reward distribution event
+    event Voted(uint256 requestId, uint256 optionId);      // Vote event
+    event Challenged(uint256 requestId, uint256 optionId); // Challenge event
+    event Arbitrated(uint256 requestId);                   // Arbitration event
+    event FeeTransferred(uint256 requestId);               // Transfer to fee event
+    event Rewarded(uint256 requestId, address[] wallet);   // Reward distribution event
 
     // Prediction
     struct Prediction {
-        mapping(uint256 => Option) options; // Voting records: uint256=prediction option, Option=option details
-        Option option;                      // Option for multiple-choice single result
+        mapping(uint256 => Option) options; // Voting records: uint256=option id, Option=option details
         uint256[] optionIds;                // IDs of prediction options
     }
 
@@ -69,30 +67,27 @@ contract OracleContract is BaseUsdcContract, IOracle {
 
     // Constructor
     constructor() {
-        DOMAIN_SEPARATOR = keccak256(abi.encode(TYPEHASH_EIP712_DOMAIN, keccak256(bytes("Oracle Contract")), keccak256(bytes("1")), block.chainid, address(this)));
+        DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712Lib.EIP712_DOMAIN, keccak256(bytes("Oracle Contract")), keccak256(bytes("1")), block.chainid, address(this)));
     }
 
     // Vote
     function vote(uint256 requestId, address prediction, uint256 optionId, uint256 outcome, address wallet, bytes calldata signature) external onlyExecutorEOA {
         // Critical parameter checks
-        require(optionId > 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
+        require(optionId != 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
 
-        // Check if voting is allowed
+        // Record vote
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        require(_getOutcome(pre, opt, optionId, setting, true) == 0, "no vote");
-
-        // Record vote
         if (setting.independent) {
-            // Independent results allow: 1=yes, 2=no, 3=unclear 50-50 settlement
-            require(outcome == 1 || outcome == 2 || outcome == 3, "outcome err");
+            // Valid outcome
+            require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.NO || outcome == OutcomeTypeLib.UNCLEAR, "outcome err");
 
             // Must be after closing time
             if (opt.firstVoteTime == 0) {
-                require(block.timestamp > setting.endingTime, "time err");
+                require(block.timestamp > setting.endTime && block.timestamp < (CANCELLATION_DURATION + setting.endTime), "time err");
                 opt.firstVoteTime = block.timestamp;
             }
             require(block.timestamp < (opt.firstVoteTime + setting.votingDuration), "time err");
@@ -101,125 +96,133 @@ contract OracleContract is BaseUsdcContract, IOracle {
             Vote storage vot = opt.votes[wallet];
             require(vot.optionId == 0, "voted");
 
+            // Valid maximum votes
+            uint256 cnt = opt.counters[outcome]++;
+            require(cnt < setting.maxVotes, "max err");
+
             // Record vote and count
             vot.optionId = uint64(optionId);
+            vot.ranking = uint32(cnt);
             vot.outcome = uint8(outcome);
-            vot.ranking = uint32(opt.counters[outcome]++);
         } else {
             // Must be after closing time
-            if (pre.option.firstVoteTime == 0) {
-                require(block.timestamp > setting.endingTime, "time err");
-                pre.option.firstVoteTime = block.timestamp;
+            Option storage opt0 = pre.options[OutcomeTypeLib.ZERO];
+            if (opt0.firstVoteTime == 0) {
+                require(block.timestamp > setting.endTime && block.timestamp < (CANCELLATION_DURATION + setting.endTime), "time err");
+                opt0.firstVoteTime = block.timestamp;
             }
-            require(block.timestamp < (pre.option.firstVoteTime + setting.votingDuration), "time err");
+            require(block.timestamp < (opt0.firstVoteTime + setting.votingDuration), "time err");
 
             // Each person can vote only once per prediction
-            Vote storage vot = pre.option.votes[wallet];
+            Vote storage vot = opt0.votes[wallet];
             require(vot.optionId == 0, "voted");
 
-            // Record vote and count
-            vot.optionId = uint64(optionId);
-            vot.outcome = uint8(outcome);
-            if (outcome == 1) {
-                vot.ranking = uint32(opt.counters[1]++);
-
-                // Record the count of voting options
-                if (opt.counters[1] == 1) {
-                    pre.optionIds.push(optionId);
+            // Valid outcome & calculate ranking
+            uint256 cnt;
+            if (outcome == OutcomeTypeLib.YES) {
+                cnt = opt.counters[OutcomeTypeLib.YES]++;
+                if (cnt == 0) {
+                    pre.optionIds.push(optionId); // Record the count of voting options
                 }
-            } else if (outcome == 3) {
-                vot.ranking = uint32(pre.option.counters[3]++);
+            } else if (outcome == OutcomeTypeLib.UNCLEAR) {
+                cnt = opt0.counters[OutcomeTypeLib.UNCLEAR]++;
             } else {
                 revert("outcome err");
             }
+
+            // Valid maximum votes
+            require(cnt < setting.maxVotes, "max err");
+
+            // Record vote and count
+            vot.optionId = uint64(optionId);
+            vot.ranking = uint32(cnt);
+            vot.outcome = uint8(outcome);
         }
 
         // Stake USDC to the prediction contract
-        if (setting.stakingAmount > 0) {
+        if (setting.stakingAmount != 0) {
             IWallet(wallet).transferToOracle(setting.stakingAmount, abi.encode(TYPEHASH_VOTE, prediction, optionId, outcome, setting.stakingAmount, block.chainid, address(this)), signature);
             stakingAmount += setting.stakingAmount;
         }
 
         // Log success event
-        emit Voted(requestId);
+        emit Voted(requestId, optionId);
     }
 
     // Challenge
     function challenge(uint256 requestId, address prediction, uint256 optionId, uint256 outcome, address wallet, bytes calldata signature) external onlyExecutorEOA {
         // Critical parameter checks
-        require(optionId > 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
+        require(optionId != 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
 
-        // Check if challenging is allowed
+        // Record challenge
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        require(_getOutcome(pre, opt, optionId, setting, true) == 0, "no challenge");
-
-        // Record challenge
         if (setting.independent) {
             // Only one challenge allowed
             require(opt.challenge.optionId == 0, "challenged");
 
             // Check if challenge timing is correct
-            require(opt.firstVoteTime > 0 && block.timestamp > (opt.firstVoteTime + setting.votingDuration) && block.timestamp < (opt.firstVoteTime + setting.votingDuration + setting.challengeDuration), "time err");
+            require(opt.firstVoteTime != 0 && block.timestamp > (opt.firstVoteTime + setting.votingDuration) && block.timestamp < (opt.firstVoteTime + setting.votingDuration + setting.challengeDuration), "time err");
 
-            // Independent result, must vote for the minority option to represent challenge. If tied, no restriction on minority.
-            uint256 yes = opt.counters[1];     // [1]=yes
-            uint256 no = opt.counters[2];      // [2]=no
-            uint256 unknown = opt.counters[3]; // [3]=unclear 50-50 settlement
-            if (yes > no && yes > unknown) {
-                require(outcome == 2 || outcome == 3, "minority"); // yes majority, can only vote no or unclear 50-50 settlement
-            } else if (no > yes && no > unknown) {
-                require(outcome == 1 || outcome == 3, "minority"); // no majority, can only vote yes or unclear 50-50 settlement
-            } else if (unknown > yes && unknown > no) {
-                require(outcome == 1 || outcome == 2, "minority"); // unclear 50-50 settlement majority, can only vote yes or no
+            // Independent result, must vote for the minority option to represent challenge. If tie, no restriction on minority.
+            uint256 yes = opt.counters[OutcomeTypeLib.YES];
+            uint256 no = opt.counters[OutcomeTypeLib.NO];
+            uint256 unclear = opt.counters[OutcomeTypeLib.UNCLEAR];
+            if (yes > no && yes > unclear) {
+                require(outcome == OutcomeTypeLib.NO || outcome == OutcomeTypeLib.UNCLEAR, "minority"); // Yes majority, can only vote no or unclear 50-50 settlement
+            } else if (no > yes && no > unclear) {
+                require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.UNCLEAR, "minority"); // No majority, can only vote yes or unclear 50-50 settlement
+            } else if (unclear > yes && unclear > no) {
+                require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.NO, "minority"); // Unclear majority, can only vote yes or no
             } else {
-                require(outcome == 1 || outcome == 2 || outcome == 3, "outcome err"); // Independent result can challenge: 1=yes, 2=no, 3=unclear 50-50 settlement
+                require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.NO || outcome == OutcomeTypeLib.UNCLEAR, "outcome err"); // Tie， no restriction
             }
 
             // Record challenge vote
             opt.challenge.optionId = uint64(optionId);
-            opt.challenge.outcome = uint8(outcome);
             opt.challenge.wallet = wallet;
+            opt.challenge.outcome = uint8(outcome);
         } else {
             // Only one challenge allowed
-            require(pre.option.challenge.optionId == 0, "challenged");
+            Option storage opt0 = pre.options[OutcomeTypeLib.ZERO];
+            require(opt0.challenge.optionId == 0, "challenged");
 
             // Check if challenge timing is correct
-            require(pre.option.firstVoteTime > 0 && block.timestamp > (pre.option.firstVoteTime + setting.votingDuration) && block.timestamp < (pre.option.firstVoteTime + setting.votingDuration + setting.challengeDuration), "time err");
+            require(opt0.firstVoteTime != 0 && block.timestamp > (opt0.firstVoteTime + setting.votingDuration) && block.timestamp < (opt0.firstVoteTime + setting.votingDuration + setting.challengeDuration), "time err");
 
-            // Single result, challenge vote cannot be the highest-voted option. If tied, no restriction.
+            // Single result, challenge vote cannot be the highest-voted option. If tie, no restriction.
             (uint256 max1, uint256 max2, ) = _getMax1Max2(pre);
-            if (outcome == 1) {
-                require(max1 == max2 || opt.counters[1] < max1, "minority");  // yes vote
-            } else if (outcome == 3) {
-                require(max1 == max2 || pre.option.counters[3] < max1, "minority"); // 3=unclear 50-50 vote
+            if (outcome == OutcomeTypeLib.YES) {
+                require(max1 == max2 || opt.counters[OutcomeTypeLib.YES] < max1, "minority");  // Yes vote
+            } else if (outcome == OutcomeTypeLib.UNCLEAR) {
+                require(max1 == max2 || opt0.counters[OutcomeTypeLib.UNCLEAR] < max1, "minority"); // Unclear vote
             } else {       
-                revert("outcome err"); // Single result only allows challenge: 1=yes, 3=unclear 50-50 settlement
+                revert("outcome err"); // Single result only allows challenge: yes and unclear
             }
 
             // Record challenge vote
-            pre.option.challenge.optionId = uint64(optionId);
-            pre.option.challenge.outcome = uint8(outcome);
-            pre.option.challenge.wallet = wallet;
+            opt0.challenge.optionId = uint64(optionId);
+            opt0.challenge.wallet = wallet;
+            opt0.challenge.outcome = uint8(outcome);
         }
 
         // Challenger must stake additional USDC to the prediction contract
-        if (setting.challengeStaking > 0) {
+        if (setting.challengeStaking != 0) {
             IWallet(wallet).transferToOracle(setting.challengeStaking, abi.encode(TYPEHASH_CHALLENGE, prediction, optionId, outcome, setting.challengeStaking, block.chainid, address(this)), signature);
             stakingAmount += setting.challengeStaking;
         }
 
         // Log success event
-        emit Challenged(requestId);
+        emit Challenged(requestId, optionId);
     }
 
     // Arbitrate
     function arbitrate(uint256 requestId, address prediction, uint256 optionId, uint256 outcome, bytes[] calldata signatures) external onlyExecutorEOA {
         // Critical parameter checks
-        require(optionId > 0, "param err");
+        require(optionId != 0 && signatures.length == 2, "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
@@ -227,20 +230,21 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Check if arbitration is allowed
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        require(signatures.length == 2 && _getOutcome(pre, opt, optionId, setting, true) == 4, "arbitrate failed");
+        require((setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true)) == OutcomeTypeLib.PENDING, "arbitrate failed");
 
         // Check by multisig
-        address addr1 = EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, abi.encode(TYPEHASH_ARBITRATE, prediction, optionId, outcome, block.chainid, address(this)), signatures[0]);
-        address addr2 = EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, abi.encode(TYPEHASH_ARBITRATE, prediction, optionId, outcome, block.chainid, address(this)), signatures[1]);
-        require(addr1 != addr2 && IPERMISSION.checkAddress2(addr1, AddressTypeLib.ARBITRATOR_EOA, addr2, AddressTypeLib.ARBITRATOR_EOA), "arbitrate failed");
+        bytes memory hash = abi.encode(TYPEHASH_ARBITRATE, prediction, optionId, outcome, block.chainid, address(this));
+        address addr1 = EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, hash, signatures[0]);
+        address addr2 = EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, hash, signatures[1]);
+        require(addr1 != address(0) && addr2 != address(0) && addr1 != addr2 && IPERMISSION.checkAddress2(addr1, AddressTypeLib.ARBITRATOR_EOA, addr2, AddressTypeLib.ARBITRATOR_EOA), "arbitrate failed");
 
         // Record arbitration
         if (setting.independent) {
-            require(outcome == 1 || outcome == 2 || outcome == 3 || outcome == 5, "outcome err");
+            require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.NO || outcome == OutcomeTypeLib.UNCLEAR || outcome == OutcomeTypeLib.CANCELLED, "outcome err");
             opt.arbitration = Arbitration(uint64(optionId), uint8(outcome));
         } else {
-            require(outcome == 1 || outcome == 3 || outcome == 5, "outcome err");
-            pre.option.arbitration = Arbitration(uint64(optionId), uint8(outcome));
+            require(outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.UNCLEAR || outcome == OutcomeTypeLib.CANCELLED, "outcome err");
+            pre.options[OutcomeTypeLib.ZERO].arbitration = Arbitration(uint64(optionId), uint8(outcome));
         }
 
         // Log success event
@@ -258,7 +262,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
     // Distribute rewards
     function reward(uint256 requestId, address prediction, uint256 optionId, address[] calldata wallets) external {
         // Critical parameter checks
-        require(optionId > 0 && IPERMISSION.checkAddress(prediction, AddressTypeLib.PREDICTION), "param err");
+        require(optionId != 0 && IPERMISSION.checkAddress(prediction, AddressTypeLib.PREDICTION), "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
@@ -266,40 +270,43 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get voting outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        uint256 outcome = _getOutcome(pre, opt, optionId, setting, true);
+        uint256 outcome = setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true);
 
-        // 1,2,3 represent yes,no,unclear 50-50 settlement, rewards can be distributed
+        // Only yes,no,unclear 50-50 settlement, rewards can be distributed
         uint256 totalRewards;
-        if (outcome == 1 || outcome == 2 || outcome == 3) {
+        if (outcome == OutcomeTypeLib.YES || outcome == OutcomeTypeLib.NO || outcome == OutcomeTypeLib.UNCLEAR) {
             totalRewards = setting.totalRewards;
-        } else if (outcome == 5) {
-            // 5 represents cancelled, no rewards, only return staked amount
+        } else if (outcome == OutcomeTypeLib.CANCELLED) {
+            // Cancelled, no rewards, only return staked amount
         } else {
             revert("outcome err");
         }
 
         // Challenge rewards
-        Option storage optOption;
         uint256 returnStaking;
         uint256 voteRewards;
         if (setting.independent) {
-            optOption = opt;
-            (returnStaking, voteRewards) = _rewardChallenge(optOption, opt, false, outcome, totalRewards, setting);
+            (returnStaking, voteRewards) = _rewardChallenge(opt, opt, false, outcome, totalRewards, setting);
         } else {
-            optOption = pre.option;
-            (returnStaking, voteRewards) = _rewardChallenge(optOption, opt, outcome == 3, outcome, totalRewards, setting);
+            Option storage opt0 = pre.options[OutcomeTypeLib.ZERO];
+            (returnStaking, voteRewards) = _rewardChallenge(opt0, opt, outcome == OutcomeTypeLib.UNCLEAR, outcome, totalRewards, setting);
+            opt = opt0; // Important assignment
         }
 
         // Voting rewards
-        for (uint256 i = 0; i < wallets.length; ++i) {
-            returnStaking += _rewardVote(optOption, wallets[i], optionId, outcome, voteRewards, setting);
+        uint256 len = wallets.length;
+        for (uint256 i; i < len;) {
+            returnStaking += _rewardVote(opt, wallets[i], optionId, outcome, voteRewards, setting);
+
+            // for
+            unchecked { ++i; }
         }
 
         // Update staked amount
         stakingAmount -= returnStaking;
 
         // Log success event
-        emit Rewarded(isExecutorEOA(msg.sender) ? requestId : 0, wallets);
+        emit Rewarded(IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA) ? requestId : 0, wallets);
     }
 
     // Get voting result
@@ -310,7 +317,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get voting outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        return _getOutcome(pre, opt, optionId, setting, false);
+        return setting.independent ? _getOutcomeIndependent(opt, setting, false) : _getOutcomeNonIndependent(pre, opt, optionId, setting, false);
     }
 
     // Get outcome
@@ -321,48 +328,48 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        return _getOutcome(pre, opt, optionId, setting, true);
+        return setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true);
     }
 
     // Challenge rewards
-    function _rewardChallenge(Option storage optOption, Option storage opt, bool isOutcome3, uint256 outcome, uint256 totalRewards, PredictionSetting memory setting) private returns (uint256, uint256) {
+    function _rewardChallenge(Option storage optOr0, Option storage opt, bool isUnclear, uint256 outcome, uint256 totalRewards, PredictionSetting memory setting) private returns (uint256, uint256) {
         uint256 returnStaking;
-        uint256 challengeRewards;
+        uint256 voteRewards;
 
         // Check if there is a challenge
-        if (optOption.challenge.optionId > 0) {
-            // Check if challenge is correct (isOutcome3=true means for multiple-choice single result arbitrated as unclear 50-50, optionId doesn't matter, only outcome needs to be correct)
-            if ((optOption.challenge.optionId == optOption.arbitration.optionId || isOutcome3) && optOption.challenge.outcome == optOption.arbitration.outcome) {
+        uint256 challengeRewards;
+        if (optOr0.challenge.optionId != 0) {
+            // Check if challenge is correct (isUnclear=true means for multiple-choice single result arbitrated as unclear 50-50, optionId doesn't matter, only outcome needs to be correct)
+            if ((optOr0.challenge.optionId == optOr0.arbitration.optionId || isUnclear) && optOr0.challenge.outcome == optOr0.arbitration.outcome) {
                 // Challenge reward
                 challengeRewards = totalRewards * setting.challengePercent / 100;
 
                 // Check if reward already distributed
-                if (!optOption.challenge.done) {
-                    optOption.challenge.done = true;
+                if (!optOr0.challenge.done) {
+                    optOr0.challenge.done = true;
                     returnStaking = setting.challengeStaking;
 
                     // Distribute reward
-                    transferUsdc(optOption.challenge.wallet, setting.challengeStaking + challengeRewards);
+                    transferUsdc(optOr0.challenge.wallet, setting.challengeStaking + challengeRewards);
                 }
             } else {
-                if (!optOption.challenge.done) {
-                    optOption.challenge.done = true;
+                if (!optOr0.challenge.done) {
+                    optOr0.challenge.done = true;
                     returnStaking = setting.challengeStaking;
 
                     // If cancelled, regardless of challenge correctness, return staked amount
-                    if (outcome == 5) {
-                        transferUsdc(optOption.challenge.wallet, setting.challengeStaking);
+                    if (outcome == OutcomeTypeLib.CANCELLED) {
+                        transferUsdc(optOr0.challenge.wallet, setting.challengeStaking);
                     }
                 }
             }
         }
 
         // Voting rewards (if participant limit reached, only top ranking participants; if not reached, all correct voters split equally)
-        uint256 voteRewards;
-        if (setting.rewardRanking > 0) {
-            uint256 voteCounter = isOutcome3 ? optOption.counters[outcome] : opt.counters[outcome];
-            if (voteCounter > 0) {
-                voteRewards = voteCounter > setting.rewardRanking ? (totalRewards - challengeRewards) / setting.rewardRanking : (totalRewards - challengeRewards) / voteCounter; // Total rewards minus the challenger's share
+        if (setting.rewardRanking != 0) {
+            uint256 cnt = isUnclear ? optOr0.counters[outcome] : opt.counters[outcome];
+            if (cnt != 0) {
+                voteRewards = cnt > setting.rewardRanking ? (totalRewards - challengeRewards) / setting.rewardRanking : (totalRewards - challengeRewards) / cnt; // Total rewards minus the challenger's share
             }
         }
 
@@ -371,11 +378,11 @@ contract OracleContract is BaseUsdcContract, IOracle {
     }
 
     // Voting rewards
-    function _rewardVote(Option storage optOption, address wallet, uint256 optionId, uint256 outcome, uint256 voteRewards, PredictionSetting memory setting) private returns (uint256) {
+    function _rewardVote(Option storage optOr0, address wallet, uint256 optionId, uint256 outcome, uint256 voteRewards, PredictionSetting memory setting) private returns (uint256) {
         uint256 returnStaking;
 
         // Check if there is a vote
-        Vote storage vot = optOption.votes[wallet];
+        Vote storage vot = optOr0.votes[wallet];
         if (vot.optionId == optionId) {
             // Check if vote is correct
             if (vot.outcome == outcome) {
@@ -393,7 +400,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
                     returnStaking = setting.stakingAmount;
 
                     // If cancelled, regardless of vote correctness, return staked amount
-                    if (outcome == 5) {
+                    if (outcome == OutcomeTypeLib.CANCELLED) {
                         transferUsdc(wallet, setting.stakingAmount);
                     }
                 }
@@ -404,76 +411,102 @@ contract OracleContract is BaseUsdcContract, IOracle {
         return returnStaking;
     }
 
-    // Get outcome (0=voting/challenging, 1=yes, 2=no, 3=unclear 50-50 settlement, 4=pending arbitration, 5=arbitrated as cancelled)
-    function _getOutcome(Prediction storage pre, Option storage opt, uint256 optionId, PredictionSetting memory setting, bool isFinal) private view returns (uint256) {
+    // Get independent outcome
+    function _getOutcomeIndependent(Option storage opt, PredictionSetting memory setting, bool isFinal) private view returns (uint256) {        
         // If arbitration exists, return arbitration result directly
-        Option storage optOption = setting.independent ? opt : pre.option;
-        if (optOption.arbitration.optionId == optionId) {
-            return optOption.arbitration.outcome;
-        } else if (optOption.arbitration.optionId > 0) {
-            return optOption.arbitration.outcome < 3 ? 3 - optOption.arbitration.outcome : optOption.arbitration.outcome; // For multiple-choice single result, invert the outcome
+        if (opt.arbitration.optionId != 0) {
+            return opt.arbitration.outcome;
         }
 
         // If no one voted and more than 120 days have passed after prediction end, mark as cancelled
-        if (optOption.firstVoteTime == 0) {
-            if (block.timestamp > (CANCELLATION_DURATION + setting.endingTime)) {
-                return 5; // Cancelled
+        if (opt.firstVoteTime == 0) {
+            if (block.timestamp > (CANCELLATION_DURATION + setting.endTime)) {
+                return OutcomeTypeLib.CANCELLED;
             }
-            return 0; // In progress
+            return OutcomeTypeLib.ZERO; // In progress
         }
 
         // If there is a challenge and no arbitration for more than 120 days, mark as cancelled
-        if (optOption.challenge.optionId > 0) {
-            return _cancelOrArbitrate(optOption.firstVoteTime, setting);
+        if (opt.challenge.optionId != 0) {
+            return _cancelOrArbitrate(opt.firstVoteTime, setting);
         }
 
         // isFinal=true means challenge period ended, can get result. Otherwise, it's the result based on current voting, note this is not final.
-        if (isFinal && block.timestamp < (optOption.firstVoteTime + setting.votingDuration + setting.challengeDuration)) {
-            return 0; // In progress
+        if (isFinal && block.timestamp < (opt.firstVoteTime + setting.votingDuration + setting.challengeDuration)) {
+            return OutcomeTypeLib.ZERO; // In progress
         }
 
         // Independent result, direct comparison
-        uint256 yes = opt.counters[1];         // [1]=yes
-        if (setting.independent) {
-            uint256 no = opt.counters[2];      // [2]=no
-            uint256 unknown = opt.counters[3]; // [3]=unclear 50-50 settlement
-            if (yes > no && yes > unknown) {
-                return 1;
-            }
-            if (no > yes && no > unknown) {
-                return 2;
-            }
-            if (unknown > yes && unknown > no) {
-                return 3;
-            }
-            return _cancelOrArbitrate(optOption.firstVoteTime, setting);
-        } else {
-            // Single result (by comparing top two maximum values)
-            (uint256 max1, uint256 max2, bool isUnknown) = _getMax1Max2(pre);
-            if (max1 == max2) {
-                return _cancelOrArbitrate(optOption.firstVoteTime, setting);
-            }
-            if (isUnknown) {
-                return 3; // Unclear vote is the highest
-            }
-            if (yes == max1) {
-                return 1; // Highest vote count
-            }
-            return 2; // Not the highest
+        uint256 yes = opt.counters[OutcomeTypeLib.YES];
+        uint256 no = opt.counters[OutcomeTypeLib.NO];
+        uint256 unclear = opt.counters[OutcomeTypeLib.UNCLEAR];
+        if (yes > no && yes > unclear) {
+            return OutcomeTypeLib.YES;
         }
+        if (no > yes && no > unclear) {
+            return OutcomeTypeLib.NO;
+        }
+        if (unclear > yes && unclear > no) {
+            return OutcomeTypeLib.UNCLEAR;
+        }
+        return _cancelOrArbitrate(opt.firstVoteTime, setting);
+    }
+
+    // Get non-independent outcome
+    function _getOutcomeNonIndependent(Prediction storage pre, Option storage opt, uint256 optionId, PredictionSetting memory setting, bool isFinal) private view returns (uint256) {
+        // If arbitration exists, return arbitration result directly
+        Option storage opt0 = pre.options[OutcomeTypeLib.ZERO];
+        if (opt0.arbitration.optionId != 0) {
+            if (opt0.arbitration.optionId == optionId) {
+                return opt0.arbitration.outcome;
+            } else {
+                return opt0.arbitration.outcome < OutcomeTypeLib.UNCLEAR ? OutcomeTypeLib.UNCLEAR - opt0.arbitration.outcome : opt0.arbitration.outcome; // For multiple-choice single result, invert the outcome
+            }
+        }
+
+        // If no one voted and more than 120 days have passed after prediction end, mark as cancelled
+        if (opt0.firstVoteTime == 0) {
+            if (block.timestamp > (CANCELLATION_DURATION + setting.endTime)) {
+                return OutcomeTypeLib.CANCELLED;
+            }
+            return OutcomeTypeLib.ZERO; // In progress
+        }
+
+        // If there is a challenge and no arbitration for more than 120 days, mark as cancelled
+        if (opt0.challenge.optionId != 0) {
+            return _cancelOrArbitrate(opt0.firstVoteTime, setting);
+        }
+
+        // isFinal=true means challenge period ended, can get result. Otherwise, it's the result based on current voting, note this is not final.
+        if (isFinal && block.timestamp < (opt0.firstVoteTime + setting.votingDuration + setting.challengeDuration)) {
+            return OutcomeTypeLib.ZERO; // In progress
+        }
+
+        // Single result (by comparing top two maximum values)
+        (uint256 max1, uint256 max2, bool isUnclear) = _getMax1Max2(pre);
+        if (max1 == max2) {
+            return _cancelOrArbitrate(opt0.firstVoteTime, setting);
+        }
+        if (isUnclear) {
+            return OutcomeTypeLib.UNCLEAR; // Unclear vote is the highest
+        }
+        if (max1 == opt.counters[OutcomeTypeLib.YES]) {
+            return OutcomeTypeLib.YES; // Highest vote count
+        }
+        return OutcomeTypeLib.NO; // Not the highest
     }
 
     // Find the top two maximum values in an array. If maximum values are equal, order doesn't matter.
     function _getMax1Max2(Prediction storage pre) private view returns (uint256, uint256, bool) {
         // Unclear vote count
-        uint256 unknown = pre.option.counters[3]; // 3 represents unclear
+        uint256 unclear = pre.options[OutcomeTypeLib.ZERO].counters[OutcomeTypeLib.UNCLEAR];
 
         // Top two vote counts
         uint256 max1;
         uint256 max2;
         uint256 len = pre.optionIds.length;
-        for (uint256 i = 0; i < len; ++i) {
-            uint256 current = pre.options[pre.optionIds[i]].counters[1];
+        for (uint256 i; i < len;) {
+            uint256 current = pre.options[pre.optionIds[i]].counters[OutcomeTypeLib.YES];
             if (current > max1) {
                 // current becomes new max, old max becomes second max
                 max2 = max1;
@@ -482,14 +515,17 @@ contract OracleContract is BaseUsdcContract, IOracle {
                 // current is second max (greater than current second max but not exceeding max)
                 max2 = current;
             }
+
+            // for
+            unchecked { ++i; }
         }
 
         // Return top 2
-        if (unknown > max1) {
-            return (unknown, max1, true); // true means unclear vote count is highest
+        if (unclear > max1) {
+            return (unclear, max1, true); // true means unclear vote count is highest
         }
-        if (unknown > max2) {
-            return (max1, unknown, false);
+        if (unclear > max2) {
+            return (max1, unclear, false);
         }
         return (max1, max2, false);
     }
@@ -498,8 +534,8 @@ contract OracleContract is BaseUsdcContract, IOracle {
     function _cancelOrArbitrate(uint256 firstVoteTime, PredictionSetting memory setting) private view returns (uint256) {
         // Tie, no arbitration for more than 120 days, mark as cancelled
         if (block.timestamp > (CANCELLATION_DURATION + firstVoteTime + setting.votingDuration + setting.challengeDuration)) {
-            return 5; // Cancelled
+            return OutcomeTypeLib.CANCELLED;
         }
-        return 4; // Pending arbitration
+        return OutcomeTypeLib.PENDING;
     }
 }

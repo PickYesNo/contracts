@@ -20,8 +20,7 @@ contract FactoryWalletContract is BaseContract, IFactory {
     // Create contract
     function create(uint256 requestId, uint256 num) external onlyExecutorEOA {
         address[] memory addrs = new address[](num);
-
-        for (uint256 i = 0; i < num; ++i) {
+        for (uint256 i; i < num;) {
             // Deploy contract
             WalletContract newContract = new WalletContract();
 
@@ -31,10 +30,13 @@ contract FactoryWalletContract is BaseContract, IFactory {
 
             // Save to temporary array
             addrs[i] = addr;
+
+            // for
+            unchecked { ++i; }
         }
 
         // Save to permission contract
-        IPERMISSION.setAddress(0, addrs, AddressTypeLib.WALLET, true);
+        IPERMISSION.setAddresses(0, addrs, AddressTypeLib.WALLET, true);
 
         // Log success
         emit WalletCreated(requestId, addrs);

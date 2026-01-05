@@ -14,7 +14,7 @@ import "./PredictionContract.sol";
 // Prediction Factory Contract
 contract FactoryPredictionContract is BaseContract, IFactory {
     mapping(address => bool) private contracts; // All prediction contracts
-
+        
     event PredictionCreated(uint256 requestId, address newContract, bytes32 predictionHash, address oracle); // Contract creation success event
 
     // Create a prediction contract
@@ -30,9 +30,7 @@ contract FactoryPredictionContract is BaseContract, IFactory {
         contracts[addr] = true;
 
         // Save to the permission contract
-        address[] memory addrs = new address[](1);
-        addrs[0] = addr;
-        IPERMISSION.setAddress(0, addrs, AddressTypeLib.PREDICTION, true);
+        IPERMISSION.setAddress(0, addr, AddressTypeLib.PREDICTION, true);
 
         // Log success
         emit PredictionCreated(requestId, addr, newPredictionHash, newOracle);

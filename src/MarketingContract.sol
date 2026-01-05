@@ -15,7 +15,6 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     mapping(address => uint256) public nonces; // Signature nonce, for replay protection
 
     bytes32 private immutable DOMAIN_SEPARATOR;
-    bytes32 private constant TYPEHASH_EIP712_DOMAIN = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant TYPEHASH_TRANSFER_FROM = keccak256("TransferFrom(uint256 amount,address wallet,bytes32 code,uint256 nonce,uint256 chainId,address marketingContract)");
     mapping(address => AmountDeadline) private walletPermits; // Authorization allowance: address=wallet address, uint256=allowance
     mapping(bytes32 => AmountDeadline) private codePermits;   // Authorization allowance: bytes32=hash(marketing code), uint256=allowance
@@ -52,15 +51,15 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
 
     // Constructor
     constructor() {
-        DOMAIN_SEPARATOR = keccak256(abi.encode(TYPEHASH_EIP712_DOMAIN, keccak256(bytes("Marketing Contract")), keccak256(bytes("1")), block.chainid, address(this)));
+        DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712Lib.EIP712_DOMAIN, keccak256(bytes("Marketing Contract")), keccak256(bytes("1")), block.chainid, address(this)));
     }
 
     // Transfer to wallet address
     function transferFrom(uint256 amount, address wallet, bytes32 code, bytes calldata signature) external onlyWallet {
         // Prioritize using signature
-        if (signature.length > 0) {
+        if (signature.length != 0) {
             address addr = EIP712Lib.recoverEIP712(DOMAIN_SEPARATOR, abi.encode(TYPEHASH_TRANSFER_FROM, amount, wallet, code, nonces[wallet]++, block.chainid, address(this)), signature);
-            require(addr == IPERMISSION.operationEOA(), "addr err");
+            require(addr != address(0) && addr == IPERMISSION.operationEOA(), "addr err");
         } else if (code != bytes32(0) && codePermits[code].amount >= amount && codePermits[code].deadline > block.timestamp) {
             // Use marketing code allowance
             codePermits[code].amount -= uint64(amount);
@@ -76,10 +75,14 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     }
 
     // Authorize wallet transfer allowance
-    function permitWallet(uint256 requestId, uint256 amount, uint256 deadline, address[] calldata wallets) external onlyOperationEOA {
+    function permitWallet(uint256 requestId, uint64 amount, uint64 deadline, address[] calldata wallets) external onlyOperationEOA {
         // Set allowance
-        for (uint256 i = 0; i < wallets.length; ++i) {
-            walletPermits[wallets[i]] = AmountDeadline(uint64(amount), uint64(deadline));
+        uint256 len = wallets.length;
+        for (uint256 i; i < len;) {
+            walletPermits[wallets[i]] = AmountDeadline(amount, deadline);
+
+            // for
+            unchecked { ++i; }
         }
 
         // Log success
@@ -87,9 +90,9 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     }
 
     // Authorize marketing code transfer allowance
-    function permitCode(uint256 requestId, uint256 amount, uint256 deadline, bytes32 code) external onlyOperationEOA {
+    function permitCode(uint256 requestId, uint64 amount, uint64 deadline, bytes32 code) external onlyOperationEOA {
         // Set allowance
-        codePermits[code] = AmountDeadline(uint64(amount), uint64(deadline));
+        codePermits[code] = AmountDeadline(amount, deadline);
 
         // Log success
         emit CodePermitted(requestId);
@@ -98,12 +101,16 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     // Transfer to wallet address
     function transferToByWallet(uint256 requestId, AmountWallet[] calldata amountWallets) external onlyExecutorEOA {
         // Loop transfers
-        for (uint256 i = 0; i < amountWallets.length; ++i) {
+        uint256 len = amountWallets.length;
+        for (uint256 i; i < len;) {
             address wallet = amountWallets[i].wallet;
             uint64 amount = amountWallets[i].amount;
             require(walletPermits[wallet].amount >= amount && walletPermits[wallet].deadline > block.timestamp, "transfer failed");
             walletPermits[wallet].amount -= amount;
             transferUsdc(wallet, amount);
+
+            // for
+            unchecked { ++i; }
         }
 
         // Log success
@@ -116,11 +123,15 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
         require(codePermits[code].deadline > block.timestamp, "deadline err");
         
         // Loop transfers
-        for (uint256 i = 0; i < amountWallets.length; ++i) {
+        uint256 len = amountWallets.length;
+        for (uint256 i; i < len;) {
             uint64 amount = amountWallets[i].amount;          
             require(codePermits[code].amount >= amount, "amount err");
             codePermits[code].amount -= amount;
             transferUsdc(amountWallets[i].wallet, amount);
+
+            // for
+            unchecked { ++i; }
         }
 
         // Log success
@@ -141,8 +152,12 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     // Get total authorization allowance
     function getWalletPermitTotal(address[] calldata wallets) external view returns (uint64) {
         uint64 total;
-        for (uint256 i = 0; i < wallets.length; ++i) {
+        uint256 len = wallets.length;
+        for (uint256 i; i < len;) {
             total += walletPermits[wallets[i]].amount;
+
+            // for
+            unchecked { ++i; }
         }
         return total;
     }
@@ -155,8 +170,12 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
     // Get total authorization allowance
     function getCodePermitTotal(bytes32[] calldata codes) external view returns (uint64) {
         uint64 total;
-        for (uint256 i = 0; i < codes.length; ++i) {
+        uint256 len = codes.length;
+        for (uint256 i; i < len;) {
             total += codePermits[codes[i]].amount;
+
+            // for
+            unchecked { ++i; }
         }
         return total;
     }
