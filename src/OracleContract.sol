@@ -194,7 +194,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
             require(opt0.firstVoteTime != 0 && block.timestamp > (opt0.firstVoteTime + setting.votingDuration) && block.timestamp < (opt0.firstVoteTime + setting.votingDuration + setting.challengeDuration), "time err");
 
             // Single result, challenge vote cannot be the highest-voted option. If tie, no restriction.
-            (uint256 max1, uint256 max2, ) = _getMax1Max2(pre);
+            (uint256 max1, uint256 max2, ,) = _getMax1Max2(pre);
             if (outcome == OutcomeTypeLib.YES) {
                 require(max1 == max2 || opt.counters[OutcomeTypeLib.YES] < max1, "minority");  // Yes vote
             } else if (outcome == OutcomeTypeLib.UNCLEAR) {
@@ -230,7 +230,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Check if arbitration is allowed
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        require((setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true)) == OutcomeTypeLib.PENDING, "arbitrate failed");
+        require((setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, optionId, setting, true)) == OutcomeTypeLib.PENDING, "arbitrate failed");
 
         // Check by multisig
         bytes memory hash = abi.encode(TYPEHASH_ARBITRATE, prediction, optionId, outcome, block.chainid, address(this));
@@ -270,7 +270,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get voting outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        uint256 outcome = setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true);
+        uint256 outcome = setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, optionId, setting, true);
 
         // Only yes,no,unclear 50-50 settlement, rewards can be distributed
         uint256 totalRewards;
@@ -317,7 +317,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get voting outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        return setting.independent ? _getOutcomeIndependent(opt, setting, false) : _getOutcomeNonIndependent(pre, opt, optionId, setting, false);
+        return setting.independent ? _getOutcomeIndependent(opt, setting, false) : _getOutcomeNonIndependent(pre, optionId, setting, false);
     }
 
     // Get outcome
@@ -328,7 +328,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         // Get outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
-        return setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, opt, optionId, setting, true);
+        return setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, optionId, setting, true);
     }
 
     // Challenge rewards
@@ -453,7 +453,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
     }
 
     // Get non-independent outcome
-    function _getOutcomeNonIndependent(Prediction storage pre, Option storage opt, uint256 optionId, PredictionSetting memory setting, bool isFinal) private view returns (uint256) {
+    function _getOutcomeNonIndependent(Prediction storage pre, uint256 optionId, PredictionSetting memory setting, bool isFinal) private view returns (uint256) {
         // If arbitration exists, return arbitration result directly
         Option storage opt0 = pre.options[OutcomeTypeLib.ZERO];
         if (opt0.arbitration.optionId != 0) {
@@ -483,34 +483,37 @@ contract OracleContract is BaseUsdcContract, IOracle {
         }
 
         // Single result (by comparing top two maximum values)
-        (uint256 max1, uint256 max2, bool isUnclear) = _getMax1Max2(pre);
+        (uint256 max1, uint256 max2, uint256 maxOptionId, bool isUnclear) = _getMax1Max2(pre);
         if (max1 == max2) {
             return _cancelOrArbitrate(opt0.firstVoteTime, setting);
         }
         if (isUnclear) {
             return OutcomeTypeLib.UNCLEAR; // Unclear vote is the highest
         }
-        if (max1 == opt.counters[OutcomeTypeLib.YES]) {
+        if (maxOptionId == optionId) {
             return OutcomeTypeLib.YES; // Highest vote count
         }
         return OutcomeTypeLib.NO; // Not the highest
     }
 
     // Find the top two maximum values in an array. If maximum values are equal, order doesn't matter.
-    function _getMax1Max2(Prediction storage pre) private view returns (uint256, uint256, bool) {
+    function _getMax1Max2(Prediction storage pre) private view returns (uint256, uint256, uint256, bool) {
         // Unclear vote count
         uint256 unclear = pre.options[OutcomeTypeLib.ZERO].counters[OutcomeTypeLib.UNCLEAR];
 
         // Top two vote counts
         uint256 max1;
         uint256 max2;
+        uint256 maxOptionId;
         uint256 len = pre.optionIds.length;
         for (uint256 i; i < len;) {
-            uint256 current = pre.options[pre.optionIds[i]].counters[OutcomeTypeLib.YES];
+            uint256 optionId = pre.optionIds[i];
+            uint256 current = pre.options[optionId].counters[OutcomeTypeLib.YES];
             if (current > max1) {
                 // current becomes new max, old max becomes second max
                 max2 = max1;
                 max1 = current;
+                maxOptionId = optionId;
             } else if (current > max2) {
                 // current is second max (greater than current second max but not exceeding max)
                 max2 = current;
@@ -522,12 +525,12 @@ contract OracleContract is BaseUsdcContract, IOracle {
 
         // Return top 2
         if (unclear > max1) {
-            return (unclear, max1, true); // true means unclear vote count is highest
+            return (unclear, max1, maxOptionId, true); // true means unclear vote count is highest
         }
         if (unclear > max2) {
-            return (max1, unclear, false);
+            return (max1, unclear, maxOptionId, false);
         }
-        return (max1, max2, false);
+        return (max1, max2, maxOptionId, false);
     }
 
     // Return cancelled or pending arbitration

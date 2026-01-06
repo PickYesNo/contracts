@@ -104,7 +104,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
         revert("recall");
     }
 
-    // Get outcome (0=waiting, 1=yes, 2=no, 3=unclear 50-50 settlement, 4=pending arbitration, 5=arbitrated as cancelled)
+    // Get outcome
     function getOutcome(address prediction, uint256 optionId) external view returns (uint256) {
         // get price
         int256 currPrice = prices[prediction][optionId];
