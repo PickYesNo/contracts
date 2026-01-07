@@ -99,6 +99,7 @@ contract PermissionContract is IPermission {
         require(addressMapping[msg.sender][AddressTypeLib.PREDICTION_FACTORY] == 1 || addressMapping[msg.sender][AddressTypeLib.WALLET_FACTORY] == 1 || msg.sender == managerEOA, "unauthorized");
 
         // set address
+        require(newAddress != address(0), "param err");
         if (addressMapping[newAddress][addrType] == 0) {
             addressArray.push(Address(newAddress, uint32(addrType), value));
         }
@@ -116,6 +117,7 @@ contract PermissionContract is IPermission {
         // set address
         uint256 len = newAddresses.length;
         for (uint256 i; i < len;) {
+            require(newAddresses[i] != address(0), "param err");
             if (addressMapping[newAddresses[i]][addrType] == 0) {
                 addressArray.push(Address(newAddresses[i], uint32(addrType), value));
             }

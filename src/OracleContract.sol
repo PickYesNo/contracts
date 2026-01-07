@@ -309,7 +309,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         emit Rewarded(IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA) ? requestId : 0, wallets);
     }
 
-    // Get voting result
+    // Get voting outcome
     function getVote(address prediction, uint256 optionId) external view returns (uint256) {
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
@@ -320,12 +320,12 @@ contract OracleContract is BaseUsdcContract, IOracle {
         return setting.independent ? _getOutcomeIndependent(opt, setting, false) : _getOutcomeNonIndependent(pre, optionId, setting, false);
     }
 
-    // Get outcome
+    // Get final outcome
     function getOutcome(address prediction, uint256 optionId) external view returns (uint256) {
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
 
-        // Get outcome
+        // Get final outcome
         Prediction storage pre = predictions[prediction][setting.roundNo];
         Option storage opt = pre.options[optionId];
         return setting.independent ? _getOutcomeIndependent(opt, setting, true) : _getOutcomeNonIndependent(pre, optionId, setting, true);
