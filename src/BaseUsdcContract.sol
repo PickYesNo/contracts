@@ -12,7 +12,7 @@ import "./BaseContract.sol";
 
 // USDC Base Contract
 abstract contract BaseUsdcContract is BaseContract {
-    address public constant USDC = 0x0000000000000000000000000000000000000000; // Built-in official USDC contract address
+    address public constant USDC = 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359; // Built-in official USDC contract address
 
     IERC20 internal constant IUSDC = IERC20(USDC); // Official USDC contract interface
 

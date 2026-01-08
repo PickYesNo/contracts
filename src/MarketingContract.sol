@@ -85,7 +85,7 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
             unchecked { ++i; }
         }
 
-        // Log success
+        // Log success event
         emit WalletPermitted(requestId);
     }
 
@@ -94,7 +94,7 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
         // Set allowance
         codePermits[code] = AmountDeadline(amount, deadline);
 
-        // Log success
+        // Log success event
         emit CodePermitted(requestId);
     }
 
@@ -113,7 +113,7 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
             unchecked { ++i; }
         }
 
-        // Log success
+        // Log success event
         emit WalletTransferred(requestId);
     }
 
@@ -134,7 +134,7 @@ contract MarketingContract is BaseUsdcContract, IMarketing {
             unchecked { ++i; }
         }
 
-        // Log success
+        // Log success event
         emit CodeTransferred(requestId);
     }
 

@@ -48,7 +48,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         uint64 optionId; // Prediction option
         uint32 ranking;  // Vote ranking
         uint8 outcome;   // Vote outcome, 1=yes, 2=no, 3=unclear 50-50 settlement
-        bool done;       // false=default, true=reward distributed
+        bool done;       // Reward been completed or not
     }
 
     // Challenge
@@ -56,7 +56,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
         uint64 optionId; // Prediction option
         address wallet;  // Challenger
         uint8 outcome;   // Challenge outcome, 1=yes, 2=no, 3=unclear 50-50 settlement
-        bool done;       // false=default, true=reward distributed
+        bool done;       // Reward been completed or not
     }
 
     // Arbitration
@@ -73,7 +73,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
     // Vote
     function vote(uint256 requestId, address prediction, uint256 optionId, uint256 outcome, address wallet, bytes calldata signature) external onlyExecutorEOA {
         // Critical parameter checks
-        require(optionId != 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
+        require(optionId != 0 && IPERMISSION.checkAddress2(address(this), AddressTypeLib.ORACLE, wallet, AddressTypeLib.WALLET), "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
@@ -152,7 +152,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
     // Challenge
     function challenge(uint256 requestId, address prediction, uint256 optionId, uint256 outcome, address wallet, bytes calldata signature) external onlyExecutorEOA {
         // Critical parameter checks
-        require(optionId != 0 && IPERMISSION.checkAddress(wallet, AddressTypeLib.WALLET), "param err");
+        require(optionId != 0 && IPERMISSION.checkAddress2(address(this), AddressTypeLib.ORACLE, wallet, AddressTypeLib.WALLET), "param err");
 
         // Retrieve parameters from the prediction contract
         PredictionSetting memory setting = IPrediction(prediction).getSetting(optionId);
@@ -510,12 +510,12 @@ contract OracleContract is BaseUsdcContract, IOracle {
             uint256 optionId = pre.optionIds[i];
             uint256 current = pre.options[optionId].counters[OutcomeTypeLib.YES];
             if (current > max1) {
-                // current becomes new max, old max becomes second max
+                // The current becomes new max, old max becomes second max
                 max2 = max1;
                 max1 = current;
                 maxOptionId = optionId;
             } else if (current > max2) {
-                // current is second max (greater than current second max but not exceeding max)
+                // The current is second max (greater than current second max but not exceeding max)
                 max2 = current;
             }
 
@@ -525,7 +525,7 @@ contract OracleContract is BaseUsdcContract, IOracle {
 
         // Return top 2
         if (unclear > max1) {
-            return (unclear, max1, maxOptionId, true); // true means unclear vote count is highest
+            return (unclear, max1, maxOptionId, true); // Return true means unclear vote count is highest
         }
         if (unclear > max2) {
             return (max1, unclear, maxOptionId, false);

@@ -70,10 +70,10 @@ contract PredictionContract is BaseUsdcContract, IPrediction {
         // Must be less than the end time
         if (setting.interval != 0) {
             // Here optionId means round no
-            require(optionId != 0 && block.timestamp < (setting.startTime + setting.interval * optionId), "param err");
+            require(optionId != 0 && block.timestamp < (setting.startTime + setting.interval * optionId) && IPERMISSION.checkAddress(address(this), AddressTypeLib.PREDICTION), "param err");
         } else {
             // Here optionId just means option id
-            require(optionId != 0 && block.timestamp < (settings[optionId].endTime != 0 ? settings[optionId].endTime : setting.endTime), "param err");
+            require(optionId != 0 && block.timestamp < (settings[optionId].endTime != 0 ? settings[optionId].endTime : setting.endTime) && IPERMISSION.checkAddress(address(this), AddressTypeLib.PREDICTION), "param err");
         }
 
         // Process Taker order
@@ -104,7 +104,7 @@ contract PredictionContract is BaseUsdcContract, IPrediction {
         // Update fees
         if (fee != 0) {
             fees += fee;
-        }        
+        }
 
         // Log success event
         emit Brokered(requestId, optionId);

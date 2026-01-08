@@ -32,7 +32,7 @@ contract FactoryPredictionContract is BaseContract, IFactory {
         // Save to the permission contract
         IPERMISSION.setAddress(0, addr, AddressTypeLib.PREDICTION, true);
 
-        // Log success
+        // Log success event
         emit PredictionCreated(requestId, addr, newPredictionHash, newOracle);
     }
 

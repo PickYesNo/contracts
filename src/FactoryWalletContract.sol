@@ -38,7 +38,7 @@ contract FactoryWalletContract is BaseContract, IFactory {
         // Save to permission contract
         IPERMISSION.setAddresses(0, addrs, AddressTypeLib.WALLET, true);
 
-        // Log success
+        // Log success event
         emit WalletCreated(requestId, addrs);
     }
 

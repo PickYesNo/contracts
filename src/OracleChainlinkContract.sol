@@ -12,7 +12,7 @@ import "./BaseUsdcContract.sol";
 
 // Chainlink Oracle Contract
 contract OracleChainlinkContract is BaseUsdcContract, IOracle {
-    uint256 public constant CANCELLATION_DURATION = 7 days; // cancellation period in days
+    uint256 public constant CANCELLATION_DURATION = 7 days; // Cancellation period in days
 
     mapping(address => mapping(uint256 => int256)) private prices; // Price mapping: address=prediction contract, uint256=round no, int256=price
 
@@ -128,7 +128,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
         }
     }
 
-    // get price
+    // Get price
     function getPrice(address prediction, uint256 optionId) external view returns (int256) {
         return prices[prediction][optionId];
     }
@@ -178,7 +178,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
         return addr;
     }
 
-    // try to get round data
+    // Try to get round data
     function _tryGetRoundData(AggregatorV3Interface agg, uint80 rid) private view returns (uint80, int256, uint256, uint256, uint80) {
         try agg.getRoundData(rid) returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) {
             return (roundId, answer, startedAt, updatedAt, answeredInRound);

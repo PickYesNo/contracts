@@ -12,7 +12,7 @@ import "./Common.sol";
 
 // Base contract
 abstract contract BaseContract {
-    address public constant PERMISSION = 0x0000000000000000000000000000000000000000; // Built-in permission contract address
+    address public constant PERMISSION = 0xb98Fa2A38d147a5D3278c336191ADc719f7A8cef; // Built-in permission contract address
 
     IPermission internal constant IPERMISSION = IPermission(PERMISSION);  // Permission contract interface
 

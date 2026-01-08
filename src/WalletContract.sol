@@ -53,9 +53,9 @@ contract WalletContract is BaseUsdcContract, IWallet {
 
     // Initialization
     constructor() {
-        predictionFactories.push(0x0000000000000000000000000000000000000000); // Built-in prediction factory contract
-        oracles[0x0000000000000000000000000000000000000000] = true;           // Built-in oracle contract
-        oracles[0x0000000000000000000000000000000000000000] = true;           // Built-in chainlink oracle contract
+        predictionFactories.push(0x1CB187729ea2395f6a7e717D2c7026C9B9345950); // Built-in prediction factory contract
+        oracles[0xF8a69A4478e870f0fB6b34482E0Dc96AEa43F676] = true;           // Built-in oracle contract
+        oracles[0x0940c93f2B4D6f48dBf628dFF0A43B3413BD8460] = true;           // Built-in chainlink oracle contract
 
         // EIP712 Domain Separator
         DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712Lib.EIP712_DOMAIN, keccak256(bytes("Wallet Contract")), keccak256(bytes("1")), block.chainid, address(this)));
@@ -98,7 +98,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
             boundTime = uint64(block.timestamp);
         }
 
-        // Log success
+        // Log success event
         emit WalletBound(requestId, wallet, byUser);
     }
 
@@ -113,7 +113,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
         // Record last used time
         lastTime = uint64(block.timestamp);
 
-        // Log success
+        // Log success event
         emit Entrusted(requestId, from, amount, msg.sender == boundWallet);
     }
 
@@ -133,7 +133,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
         // Redeem to the user-specified wallet
         transferUsdc(wallet, amount);
 
-        // Log success
+        // Log success event
         emit Redeemed(requestId, wallet, amount, byUser);
     }
 
@@ -153,7 +153,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
         // Set the pre-signed amount
         preSignAmount = amount;
 
-        // Log success
+        // Log success event
         emit PreSigned(requestId, amount, byUser);
     }
 
@@ -179,7 +179,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
             transferUsdc(IPERMISSION.feeEOA(), reclaimed);
         }
 
-        // Log success
+        // Log success event
         emit Presented(requestId);
     }
 
@@ -196,7 +196,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
         // No need to worry about whether the transfer was successful
         token.transfer(to, balance);
 
-        // Log success
+        // Log success event
         emit TokenRescued(requestId, from, to, balance);
     }
 
@@ -237,7 +237,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
             }
         }
 
-        // Log success
+        // Log success event
         emit WalletRecycled(requestId, balance, success);
     }
 
@@ -288,7 +288,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
             oracles[newOracle] = value;
         }
 
-        // Log success
+        // Log success event
         emit WalletUpgraded(requestId);
     }
 
@@ -296,7 +296,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
     function transferToBuyPrediction(address oracle, uint256 amount, bytes calldata encodedData, bytes calldata signature) external {
         require(oracles[oracle] && _checkPrediction(msg.sender), "unauthorized");
         _checkSign(amount, encodedData, signature);
-        transferUsdc(msg.sender, amount);        
+        transferUsdc(msg.sender, amount);
     }
 
     // Verify sell signature

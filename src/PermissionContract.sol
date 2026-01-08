@@ -12,9 +12,9 @@ import "./Common.sol";
 
 // Permission Contract
 contract PermissionContract is IPermission {
-    address public feeEOA = 0x0000000000000000000000000000000000000000;       // Built-in fee EOA
-    address public managerEOA = 0x0000000000000000000000000000000000000000;   // Built-in manager EOA
-    address public operationEOA = 0x0000000000000000000000000000000000000000; // Built-in operation EOA
+    address public feeEOA = 0x85A96D2662eDbd23838274132912CCbB503020Cb;       // Built-in fee EOA
+    address public managerEOA = 0x8d8DeB403B57b05FB1a3c2FE3515257419C4acc4;   // Built-in manager EOA
+    address public operationEOA = 0x0bf5D1D02629E2a8eD0018e34606C5c96c564d66; // Built-in operation EOA
     uint256 public nonce;                                                     // Signature nonce for replay protection
 
     bytes32 private immutable DOMAIN_SEPARATOR;
@@ -25,8 +25,8 @@ contract PermissionContract is IPermission {
     bytes32 private constant TYPEHASH_MULTISIG_MANAGER_EOA = keccak256("MultisigManagerEOA(address managerEOA,uint256 nonce,uint256 chainId,address permissionContract)");
     bytes32 private constant TYPEHASH_MULTISIG_OPERATION_EOA = keccak256("MultisigOperationEOA(address operationEOA,uint256 nonce,uint256 chainId,address permissionContract)");
 
-    mapping(address => mapping(uint256 => uint256)) private addressMapping; // All addresses
     Address[] private addressArray;                                         // All addresses
+    mapping(address => mapping(uint256 => uint256)) private addressMapping; // All addresses
 
     event FeeEOASet(uint256 requestId);                    // Fee EOA set event
     event ManagerEOASet(uint256 requestId);                // Manager EOA set event
@@ -57,7 +57,7 @@ contract PermissionContract is IPermission {
         require(addr != address(0) && addr == newFeeEOA, "addr err");
         feeEOA = newFeeEOA;
 
-        // Log success
+        // Log success event
         emit FeeEOASet(requestId);
     }
 
@@ -73,7 +73,7 @@ contract PermissionContract is IPermission {
         require(addr != address(0) && addr == newManagerEOA, "addr err");
         managerEOA = newManagerEOA;
 
-        // Log success
+        // Log success event
         emit ManagerEOASet(requestId);
     }
 
@@ -89,7 +89,7 @@ contract PermissionContract is IPermission {
         require(addr != address(0) && addr == newOperationEOA, "addr err");
         operationEOA = newOperationEOA;
 
-        // Log success
+        // Log success event
         emit OperationEOASet(requestId);
     }
 
@@ -105,7 +105,7 @@ contract PermissionContract is IPermission {
         }
         addressMapping[newAddress][addrType] = value ? 1 : 2;
 
-        // Log success
+        // Log success event
         emit AddressSet(requestId, addrType);
     }
 
@@ -127,7 +127,7 @@ contract PermissionContract is IPermission {
             unchecked { ++i; }
         }
 
-        // Log success
+        // Log success event
         emit AddressSet(requestId, addrType);
     }
 
