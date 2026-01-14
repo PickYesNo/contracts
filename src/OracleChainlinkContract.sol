@@ -19,7 +19,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
     event PriceSaved(uint256 requestId, uint80 roundId, int256 price); // Event emitted when price is saved
 
     // Fetch price via Chainlink and save it on-chain
-    function savePrice(uint256 requestId, address prediction, uint256 optionId, uint80 startRoundId, uint256 length) external onlyExecutorEOA {
+    function savePrice(uint256 requestId, address prediction, uint256 optionId, uint80 startRoundId, uint256 length) external {
         // Check if price has already been saved
         require(prices[prediction][optionId] == 0, "saved");
 
