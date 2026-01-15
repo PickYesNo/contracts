@@ -50,13 +50,13 @@ contract WalletContract is BaseUsdcContract, IWallet {
         _;
     }
 
-    // Only Prediction can call
+    // Only prediction contracts can call
     modifier onlyPrediction() {
         require(_checkPrediction(msg.sender), "unauthorized");
         _;
     }
 
-    // Only Oracle can call
+    // Only oracle contracts can call
     modifier onlyOracle() {
         require(oracles[msg.sender], "unauthorized");
         _;
@@ -116,8 +116,11 @@ contract WalletContract is BaseUsdcContract, IWallet {
         // Transfer to Wallet Contract
         require(IUSDC.transferFrom(from, address(this), amount), "entrust failed"); 
 
+        // Whether called by the user
+        bool byUser = msg.sender == boundWallet;
+
         // Log success event
-        emit Entrusted(requestId, from, amount, msg.sender == boundWallet);
+        emit Entrusted(requestId, from, amount, byUser);
     }
 
     // Redeem USDC to a specified address. Besides platform calls, the bound wallet can also call to redeem by itself.
@@ -286,7 +289,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
     }
 
     // Verify signature and transfer USDC to oracle contract
-    function transferToOracle(uint256 amount, bytes calldata encodedData, bytes calldata signature) external onlyOracle{
+    function transferToOracle(uint256 amount, bytes calldata encodedData, bytes calldata signature) external onlyOracle {
         _checkSign(amount, encodedData, signature);
         transferUsdc(msg.sender, amount);
     }
