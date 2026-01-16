@@ -66,7 +66,7 @@ contract WalletContract is BaseUsdcContract, IWallet {
     constructor() {
         predictionFactories.push(0x1CB187729ea2395f6a7e717D2c7026C9B9345950); // Built-in prediction factory contract
         oracles[0xF8a69A4478e870f0fB6b34482E0Dc96AEa43F676] = true;           // Built-in oracle contract
-        oracles[0xeDc1735f2d4CCE70DfCdCfc94ea8b516fF55b253] = true;           // Built-in chainlink oracle contract
+        oracles[0xfeE6959a685749E55c75650D10edaF7E336672Ef] = true;           // Built-in chainlink oracle contract
 
         // EIP712 Domain Separator
         DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712Lib.EIP712_DOMAIN, keccak256(bytes("Wallet Contract")), keccak256(bytes("1")), block.chainid, address(this)));

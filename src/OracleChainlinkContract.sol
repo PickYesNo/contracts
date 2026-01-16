@@ -8,10 +8,10 @@ Contact PickYesNo.com for licensing inquiries.
 
 pragma solidity 0.8.28;
 
-import "./BaseUsdcContract.sol";
+import "./BaseContract.sol";
 
 // Chainlink Oracle Contract
-contract OracleChainlinkContract is BaseUsdcContract, IOracle {
+contract OracleChainlinkContract is BaseContract, IOracle {
     uint256 public constant CANCELLATION_DURATION = 7 days; // Cancellation period in days
 
     mapping(address => mapping(uint256 => int256)) private prices; // Price mapping: address=prediction contract, uint256=round no, int256=price
@@ -51,7 +51,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
                     if (updatedAt < endTime) {
                         if (price > 0) {
                             prices[prediction][optionId] = price;
-                            emit PriceSaved(requestId, rid, price);
+                            emit PriceSaved(IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA) ? requestId : 0, rid, price);
                             return;
                         } else {
                             break;
@@ -74,7 +74,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
                 (, answer, , updatedAt, ) = _tryGetRoundData(aggregatorV3, startRoundId);
                 if (updatedAt >= endTime) {
                     prices[prediction][optionId] = answer;
-                    emit PriceSaved(requestId, startRoundId, answer);
+                    emit PriceSaved(IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA) ? requestId : 0, startRoundId, answer);
                     return;
                 }
             }
@@ -90,7 +90,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
                 if (updatedAt != 0) {
                     if (updatedAt < endTime) {
                         prices[prediction][optionId] = price;
-                        emit PriceSaved(requestId, rid, price);
+                        emit PriceSaved(IPERMISSION.checkAddress(msg.sender, AddressTypeLib.EXECUTOR_EOA) ? requestId : 0, rid, price);
                         return;
                     } else {
                         rid = roundId;
@@ -164,7 +164,7 @@ contract OracleChainlinkContract is BaseUsdcContract, IOracle {
             case 13 { addr := 0x4746DeC9e833A82EC7C2C1356372CcF2cfcD2F3D } // DAI：https://data.chain.link/feeds/polygon/mainnet/dai-usd
             case 14 { addr := 0x72484B12719E23115761D5DA1646945632979bB6 } // AAVE：https://data.chain.link/feeds/polygon/mainnet/aave-usd
             case 15 { addr := 0x3FabBfb300B1e2D7c9B84512fe9D30aeDF24C410 } // GRT：https://data.chain.link/feeds/polygon/mainnet/grt-usd
-            case 16 { addr := 0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608 } // FAXG：https://data.chain.link/feeds/polygon/mainnet/paxg-usd
+            case 16 { addr := 0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608 } // PAXG：https://data.chain.link/feeds/polygon/mainnet/paxg-usd
             case 17 { addr := 0xA1CbF3Fe43BC3501e3Fc4b573e822c70e76A7512 } // MANA：https://data.chain.link/feeds/polygon/mainnet/mana-usd
             case 18 { addr := 0x7C5D415B64312D38c56B54358449d0a4058339d2 } // TUSD：https://data.chain.link/feeds/polygon/mainnet/tusd-usd
             case 19 { addr := 0x2A8758b7257102461BC958279054e372C2b1bDE6 } // COMP：https://data.chain.link/feeds/polygon/mainnet/comp-usd
