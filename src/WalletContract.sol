@@ -111,7 +111,11 @@ contract WalletContract is BaseUsdcContract, IWallet {
     // Entrust USDC to contract. Besides platform calls, the bound wallet can also call to redeem by itself.
     function entrust(uint256 requestId, address from, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external onlyBoundWalletOrExecutorEOA {
         // Permit
-        IUSDC.permit(from, address(this), amount, deadline, v, r, s);
+        try IUSDC.permit(from, address(this), amount, deadline, v, r, s) {
+            // permit succeeded
+        } catch {
+            // ignore and continue
+        }
 
         // Transfer to Wallet Contract
         require(IUSDC.transferFrom(from, address(this), amount), "entrust failed"); 
